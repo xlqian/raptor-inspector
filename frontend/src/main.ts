@@ -1,7 +1,7 @@
 import 'leaflet/dist/leaflet.css';
   import L from 'leaflet';
   import './style.css';
-  import init, { parse_and_process_csv } from './wasm/wasm_pkg';
+  import init, { parse_and_process_csv, parse_and_process_raptor_output, echo, RaptorOutput, MyDataFrame } from './wasm/wasm_pkg/wasm.js';
 
   async function main() {
     await init();
@@ -13,7 +13,9 @@ import 'leaflet/dist/leaflet.css';
         <b>Drop your CSV here</b>
         <div><small>Format: lon,lat,text per line</small>
         <br>
-        <input type="file" id="csv-file" accept=".csv" style="margin-top:1em" /></div>
+        <input type="file" id="csv-file" accept=".csv" style="margin-top:1em" />
+        <input type="file" id="raptor-output" accept=".txt" style="margin-top:1em" /></div>
+        <input type="file" id="stops" accept=".csv" style="margin-top:1em" /></div>
       </div>
       <div id="map" style="height: 480px;"></div>
     `;
@@ -68,6 +70,8 @@ import 'leaflet/dist/leaflet.css';
       renderMarkers(jsonResult);
     }
 
+
+
     // Drag & drop area events
     const dropArea = document.getElementById('drop-area')!;
     ['dragenter', 'dragover'].forEach(event =>
@@ -96,8 +100,16 @@ import 'leaflet/dist/leaflet.css';
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) readFile(file);
     });
+    document.getElementById('raptor-output')!.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (file) read_raptor_output(file); 
+    });
+    document.getElementById('stops')!.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (file) read_stops(file); 
+    });
 
-    function readFile(file: File) {
+  function readFile(file: File) {
       const reader = new FileReader();
       reader.onload = function () {
         if (typeof reader.result === 'string') {
@@ -105,7 +117,30 @@ import 'leaflet/dist/leaflet.css';
         }
       };
       reader.readAsText(file);
-    }
   }
+
+  function read_raptor_output(file: File) {
+      const reader = new FileReader();
+      reader.onload = function () {
+        if (typeof reader.result === 'string') {
+          const raptor_output = new RaptorOutput(reader.result);
+          console.log(raptor_output.rounds_number());
+        }
+      };
+      reader.readAsText(file);
+  }
+
+  function read_stops(file: File) {
+      const reader = new FileReader();
+      reader.onload = function () {
+        if (typeof reader.result === 'string') {
+          const stops = new MyDataFrame(reader.result);
+        }
+      };
+      reader.readAsText(file);
+  }
+
+
+}
 
   main();
