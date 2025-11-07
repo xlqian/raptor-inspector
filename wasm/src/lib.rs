@@ -3,6 +3,8 @@ use serde::Serialize;
 use serde_wasm_bindgen;
 use std::{collections::HashSet, io::Cursor};
 use wasm_bindgen::prelude::*;
+mod movix;
+use movix::*;
 
 #[wasm_bindgen]
 extern "C" {
@@ -52,145 +54,9 @@ pub fn parse_and_process_csv(csv_str: &str) -> String {
     serde_json::to_string(&results).unwrap_or_else(|_| "[]".into())
 }
 
-#[derive(Debug)]
-struct InitRound {
-    marked_stops: Vec<i64>,
-}
-
-#[derive(Debug)]
-struct Route {
-    route_id: i64,
-    explored_stops: Vec<i64>,
-}
-#[derive(Debug)]
-struct RouteRound {
-    explored_routes: Vec<Route>,
-}
-
-#[derive(Debug)]
-struct Transfer {
-    marked_stop: i64,
-    reached_stops: Vec<i64>,
-}
-
-#[derive(Debug)]
-struct TransferRound {
-    explored_transfers: Vec<Transfer>,
-}
-
-#[derive(Debug)]
-enum Round {
-    Init(InitRound),
-    Route(RouteRound),
-    Transfer(TransferRound),
-    None,
-}
-
-// alias type
 #[wasm_bindgen]
-pub struct RaptorOutput {
-    rounds: Vec<Round>,
-}
-
-#[wasm_bindgen]
-impl RaptorOutput {
-    #[wasm_bindgen(constructor)]
-    pub fn new(raptor_output_str: &str) -> Self {
-        let mut rounds = Vec::new();
-
-        let mut current_round = Round::None;
-
-        for (_, line) in raptor_output_str.lines().enumerate() {
-            if line.is_empty() {
-                continue;
-            }
-
-            if line.starts_with("round") {
-                let round_number = line
-                    .split(",")
-                    .filter_map(|s| s.parse::<u8>().ok())
-                    .last()
-                    .unwrap();
-
-                if round_number == 0 {
-                    current_round = Round::Init(InitRound {
-                        marked_stops: Vec::new(),
-                    });
-                } else {
-                    let to_be_moved = std::mem::replace(&mut current_round, Round::None);
-                    rounds.push(to_be_moved);
-                    println!("{:?}", rounds);
-
-                    match round_number % 2 {
-                        1 => {
-                            current_round = Round::Route(RouteRound {
-                                explored_routes: Vec::new(),
-                            });
-                        }
-                        0 => {
-                            current_round = Round::Transfer(TransferRound {
-                                explored_transfers: Vec::new(),
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-            } else {
-                match current_round {
-                    Round::Init(ref mut round) => {
-                        // split then parse into int
-                        let stop_indexes = line.split(",").filter_map(|s| s.parse::<i64>().ok());
-                        round.marked_stops.extend(stop_indexes);
-                    }
-                    Round::Route(ref mut round) => {
-                        let mut parts = line
-                            .split(',')
-                            .skip(1)
-                            .filter_map(|s| s.parse::<i64>().ok());
-
-                        let route_id = parts.next().unwrap();
-                        let explored_stops = parts.collect();
-                        round.explored_routes.push(Route {
-                            route_id,
-                            explored_stops,
-                        });
-                    }
-                    Round::Transfer(ref mut round) => {
-                        let mut parts = line
-                            .split(',')
-                            .skip(1)
-                            .filter_map(|s| s.parse::<i64>().ok());
-
-                        let marked_stop = parts.next().unwrap();
-                        let reached_stops = parts.collect();
-                        round.explored_transfers.push(Transfer {
-                            marked_stop,
-                            reached_stops,
-                        });
-                    }
-                    Round::None => {}
-                }
-            }
-        }
-        rounds.push(current_round);
-
-        RaptorOutput { rounds }
-    }
-
-    #[wasm_bindgen]
-    pub fn rounds_number(&self) -> usize {
-        self.rounds.len()
-    }
-
-    #[wasm_bindgen]
-    pub fn called_by_TS(&self) -> String {
-        "TOTO".to_string()
-    }
-}
-
-#[wasm_bindgen]
-pub fn parse_and_process_raptor_output(input: &str) -> RaptorOutput {
-    RaptorOutput::new(input)
+pub fn parse_and_process_raptor_output(input: &str) -> movix::raptor_output::RaptorOutput {
+    movix::raptor_output::RaptorOutput::new(input)
 }
 
 #[wasm_bindgen]
@@ -285,44 +151,21 @@ pub fn echo(input: &str) -> String {
 #[wasm_bindgen]
 pub fn stops_details_of_round(
     data: &MyDataFrame,
-    raptor_output: &RaptorOutput,
+    raptor_output: &movix::raptor_output::RaptorOutput,
     round_index: usize,
 ) -> JsValue {
     let coords: Vec<(f64, f64)> = Vec::new();
-    if round_index >= raptor_output.rounds.len() {
+    if round_index >= raptor_output.rounds_number() {
         return serde_wasm_bindgen::to_value(&coords).unwrap();
     }
-    let coords = match &raptor_output.rounds[round_index] {
-        Round::Init(init_round) => data
-            .details_of_stops(&init_round.marked_stops)
-            .into_iter()
-            .filter_map(|opt| opt)
-            .collect::<Vec<(f64, f64, String)>>(),
-        Round::Route(route_round) => {
-            let ids = route_round
-                .explored_routes
-                .iter()
-                .flat_map(|route| route.explored_stops.iter().cloned())
-                .collect::<Vec<i64>>();
-            data.details_of_stops(&ids)
-                .into_iter()
-                .filter_map(|opt| opt)
-                .collect::<Vec<(f64, f64, String)>>()
-        }
-        Round::Transfer(transfer_round) => {
-            let ids = transfer_round
-                .explored_transfers
-                .iter()
-                .flat_map(|transfer| transfer.reached_stops.iter().cloned())
-                .collect::<Vec<i64>>();
 
-            data.details_of_stops(&ids)
-                .into_iter()
-                .filter_map(|opt| opt)
-                .collect::<Vec<(f64, f64, String)>>()
-        }
-        Round::None => Vec::new(),
-    };
+    let stop_offsets = raptor_output.stop_offsets_of_round(round_index);
+    let coords = data
+        .details_of_stops(&stop_offsets)
+        .into_iter()
+        .flatten()
+        .collect::<Vec<(f64, f64, String)>>();
+
     serde_wasm_bindgen::to_value(&coords).unwrap()
 }
 
@@ -345,6 +188,6 @@ marked_stop,42,
 marked_stop,43,45,89,78,
 "#;
         let raptor_output = parse_and_process_raptor_output(input);
-        assert_eq!(raptor_output.rounds.len(), 3);
+        assert_eq!(raptor_output.rounds_number(), 3);
     }
 }
