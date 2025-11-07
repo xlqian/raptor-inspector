@@ -1,8 +1,8 @@
 use polars::prelude::*;
 use serde::Serialize;
-use std::io::Cursor;
+use serde_wasm_bindgen;
+use std::{collections::HashSet, io::Cursor};
 use wasm_bindgen::prelude::*;
-use web_sys::console;
 
 #[wasm_bindgen]
 extern "C" {
@@ -209,8 +209,70 @@ impl MyDataFrame {
             .into_reader_with_file_handle(cursor)
             .finish()
             .unwrap();
-        console::log_1(&format!("DataFrame loaded with {} rows", df.height()).into());
         MyDataFrame { df }
+    }
+
+    #[wasm_bindgen]
+    pub fn row_count(&self) -> usize {
+        self.df.height()
+    }
+}
+
+impl MyDataFrame {
+    pub fn coords_of_stop(&self, stop_offset: i64) -> Option<(f64, f64)> {
+        let filter = self
+            .df
+            .column("StopOffset")
+            .unwrap()
+            .i64()
+            .unwrap()
+            .equal(stop_offset as i64);
+        let filtered_df = self.df.filter(&filter).unwrap();
+
+        let lon_series = filtered_df.column("StopLng").unwrap().f64().unwrap();
+        let lat_series = filtered_df.column("StopLat").unwrap().f64().unwrap();
+
+        if lon_series.len() == 0 || lat_series.len() == 0 {
+            return None;
+        }
+
+        let lon = lon_series.get(0).unwrap();
+        let lat = lat_series.get(0).unwrap();
+
+        Some((lon, lat))
+    }
+
+    pub fn details_of_stops(&self, stop_offsets: &Vec<i64>) -> Vec<Option<(f64, f64, String)>> {
+        let id_set: HashSet<&i64> = stop_offsets.iter().collect();
+
+        let filter = self
+            .df
+            .column("StopOffset")
+            .unwrap()
+            .i64()
+            .unwrap()
+            .into_iter()
+            .map(|v| v.map_or(false, |id| id_set.contains(&id)))
+            .collect::<BooleanChunked>();
+
+        let matching_rows = self.df.filter(&filter).unwrap();
+        let lon_series = matching_rows.column("StopLng").unwrap().f64().unwrap();
+        let lat_series = matching_rows.column("StopLat").unwrap().f64().unwrap();
+        let name_series = matching_rows.column("Stopname").unwrap().str().unwrap();
+
+        let mut coords = Vec::new();
+        for ((lon, lat), name) in lon_series
+            .iter()
+            .zip(lat_series.iter())
+            .zip(name_series.iter())
+        {
+            coords.push(Some((
+                lon.unwrap(),
+                lat.unwrap(),
+                name.unwrap().to_string(),
+            )));
+        }
+        coords
     }
 }
 
@@ -218,6 +280,50 @@ impl MyDataFrame {
 #[wasm_bindgen]
 pub fn echo(input: &str) -> String {
     input.to_string()
+}
+
+#[wasm_bindgen]
+pub fn stops_details_of_round(
+    data: &MyDataFrame,
+    raptor_output: &RaptorOutput,
+    round_index: usize,
+) -> JsValue {
+    let coords: Vec<(f64, f64)> = Vec::new();
+    if round_index >= raptor_output.rounds.len() {
+        return serde_wasm_bindgen::to_value(&coords).unwrap();
+    }
+    let coords = match &raptor_output.rounds[round_index] {
+        Round::Init(init_round) => data
+            .details_of_stops(&init_round.marked_stops)
+            .into_iter()
+            .filter_map(|opt| opt)
+            .collect::<Vec<(f64, f64, String)>>(),
+        Round::Route(route_round) => {
+            let ids = route_round
+                .explored_routes
+                .iter()
+                .flat_map(|route| route.explored_stops.iter().cloned())
+                .collect::<Vec<i64>>();
+            data.details_of_stops(&ids)
+                .into_iter()
+                .filter_map(|opt| opt)
+                .collect::<Vec<(f64, f64, String)>>()
+        }
+        Round::Transfer(transfer_round) => {
+            let ids = transfer_round
+                .explored_transfers
+                .iter()
+                .flat_map(|transfer| transfer.reached_stops.iter().cloned())
+                .collect::<Vec<i64>>();
+
+            data.details_of_stops(&ids)
+                .into_iter()
+                .filter_map(|opt| opt)
+                .collect::<Vec<(f64, f64, String)>>()
+        }
+        Round::None => Vec::new(),
+    };
+    serde_wasm_bindgen::to_value(&coords).unwrap()
 }
 
 #[cfg(test)]

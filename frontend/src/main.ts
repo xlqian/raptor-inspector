@@ -1,14 +1,17 @@
 import 'leaflet/dist/leaflet.css';
   import L from 'leaflet';
   import './style.css';
-  import init, { parse_and_process_csv, parse_and_process_raptor_output, echo, RaptorOutput, MyDataFrame } from './wasm/wasm_pkg/wasm.js';
+  import init, { parse_and_process_csv, stops_details_of_round, echo, RaptorOutput, MyDataFrame } from './wasm/wasm_pkg/wasm.js';
+
+  let stops =  {};
+  let raptor_output = {};
 
   async function main() {
     await init();
 
     // Setup the application UI
     document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-      <h1>CSV Map Drop Demo (Rust/WASM parse)</h1>
+      <h1>Raptor Inspector  <span style="font-size:1.2em">🕵️‍♂️</span> </h1>
       <div id="drop-area" style="border:2px dashed #888;padding:2em;margin:2em 0;text-align:center">
         <b>Drop your CSV here</b>
         <div><small>Format: lon,lat,text per line</small>
@@ -17,6 +20,7 @@ import 'leaflet/dist/leaflet.css';
         <input type="file" id="raptor-output" accept=".txt" style="margin-top:1em" /></div>
         <input type="file" id="stops" accept=".csv" style="margin-top:1em" /></div>
       </div>
+      <div id="slider-container"></div>
       <div id="map" style="height: 480px;"></div>
     `;
 
@@ -70,8 +74,6 @@ import 'leaflet/dist/leaflet.css';
       renderMarkers(jsonResult);
     }
 
-
-
     // Drag & drop area events
     const dropArea = document.getElementById('drop-area')!;
     ['dragenter', 'dragover'].forEach(event =>
@@ -123,7 +125,7 @@ import 'leaflet/dist/leaflet.css';
       const reader = new FileReader();
       reader.onload = function () {
         if (typeof reader.result === 'string') {
-          const raptor_output = new RaptorOutput(reader.result);
+          raptor_output = new RaptorOutput(reader.result);
           console.log(raptor_output.rounds_number());
         }
       };
@@ -134,12 +136,59 @@ import 'leaflet/dist/leaflet.css';
       const reader = new FileReader();
       reader.onload = function () {
         if (typeof reader.result === 'string') {
-          const stops = new MyDataFrame(reader.result);
+          stops = new MyDataFrame(reader.result);
+          console.log(stops.row_count());
         }
       };
       reader.readAsText(file);
   }
 
+  // Get DOM elements
+  const sliderContainer = document.getElementById('slider-container');
+
+  // Create slider label
+  const label = document.createElement('label');
+  label.innerText = 'Round Number: ';
+
+  // Create the slider (drag bar)
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = '0';
+  slider.max = '10';
+  slider.step = '1';
+  slider.value = '0';
+
+  // Create step display
+  const valueDisplay = document.createElement('span');
+  valueDisplay.innerText = slider.value;
+
+  // Update display on slider move
+  slider.addEventListener('input', () => {
+    valueDisplay.innerText = slider.value;
+    // Optional: handleMapUpdate(Number(slider.value));
+    console.log(`Slider moved to: ${slider.value}`);
+    if (stops && raptor_output) {
+        const details = stops_details_of_round(stops, raptor_output, Number(slider.value));
+        clearMarkers();
+
+        for (const detail of details) {
+            const marker = L.circleMarker([detail[1], detail[0]], {
+              radius: 2,             // tiny circle
+              color: "#1976d2",      // blue border
+              fillColor: "#1976d2",  // blue fill (make it match if you want solid)
+              fillOpacity: 1         // solid circle
+            }).addTo(map);
+            marker.bindPopup(`<b> ${detail[2]} </b>`);
+            marker.on('click', () => marker.openPopup());
+        }
+ 
+      }
+  });
+
+// Assemble above the map
+label.appendChild(slider);
+label.appendChild(valueDisplay);
+sliderContainer?.appendChild(label);
 
 }
 
